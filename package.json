@@ -2,6 +2,10 @@
   "name": "ai-resume-analyzer-workspace",
   "version": "1.0.0",
   "description": "AI Resume Analyzer & Job Match Assistant - Full-Stack MERN Application",
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "scripts": {
     "install:all": "npm install && npm install --prefix server && npm install --prefix client",
     "server": "npm run dev --prefix server",
@@ -11,6 +15,7 @@
     "test:server": "npm test --prefix server"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "vercel": "^59.23.2"
   }
 }
