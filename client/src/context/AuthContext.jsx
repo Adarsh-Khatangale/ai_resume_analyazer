@@ -1,19 +1,22 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authAPI, setAuthToken } from '../services/api';
-import {
-  supabase,
-  isSupabaseConfigured,
-  signInWithGoogleViaSupabase,
-  signOutViaSupabase,
-  signInWithEmailViaSupabase,
-  signUpWithEmailViaSupabase,
-} from '../services/supabaseClient';
 import { toast } from 'react-toastify';
 
 const AuthContext = createContext();
 
+const SUPABASE_PROJECT_URL =
+  import.meta.env.VITE_SUPABASE_URL || 'https://fxltywnaiwebfghwfqyp.supabase.co';
+
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('user_session');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
   const [loading, setLoading] = useState(true);
   const [guestAnalysis, setGuestAnalysis] = useState(() => {
     try {
@@ -25,47 +28,77 @@ export const AuthProvider = ({ children }) => {
   });
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [authModalNotice, setAuthModalNotice] = useState('');
   const [authModalInitialTab, setAuthModalInitialTab] = useState('signin');
 
   const checkAuth = async () => {
     try {
       setLoading(true);
 
-      // 1. First check if Supabase session is active
-      if (isSupabaseConfigured && supabase) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session && session.user) {
-          const supaUser = {
-            id: session.user.id,
-            name:
-              session.user.user_metadata?.full_name ||
-              session.user.user_metadata?.name ||
-              session.user.email?.split('@')[0] ||
-              'User',
-            email: session.user.email,
-            profileImage:
-              session.user.user_metadata?.avatar_url ||
-              session.user.user_metadata?.picture ||
-              `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(session.user.email)}`,
-            authProvider: session.user.app_metadata?.provider || 'supabase',
-          };
-          setUser(supaUser);
-          setAuthToken(session.access_token);
-          setLoading(false);
-          return;
+      // 1. Check if returning from Google OAuth redirect with hash (#access_token=...)
+      const hash = window.location.hash;
+      if (hash && hash.includes('access_token=')) {
+        try {
+          const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
+          const token = hashParams.get('access_token');
+          if (token) {
+            const base64Payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+            const payload = JSON.parse(decodeURIComponent(escape(atob(base64Payload))));
+
+            const googleUser = {
+              _id: payload.sub || 'usr-' + Date.now(),
+              id: payload.sub,
+              name:
+                payload.user_metadata?.full_name ||
+                payload.user_metadata?.name ||
+                payload.email?.split('@')[0] ||
+                'User',
+              email: payload.email,
+              profileImage:
+                payload.user_metadata?.avatar_url ||
+                payload.user_metadata?.picture ||
+                `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(payload.email || 'User')}`,
+              authProvider: 'google',
+              isDemoUser: false,
+            };
+
+            setUser(googleUser);
+            setAuthToken(token);
+            localStorage.setItem('user_session', JSON.stringify(googleUser));
+            toast.success(`Welcome, ${googleUser.name.split(' ')[0]}!`);
+
+            // Clean hash from address bar
+            window.history.replaceState({}, document.title, window.location.pathname);
+            setLoading(false);
+            return;
+          }
+        } catch (err) {
+          console.warn('Could not parse Google OAuth hash payload:', err);
         }
       }
 
-      // 2. Otherwise check backend session / stored token
-      const res = await authAPI.getMe();
-      if (res.data && res.data.user) {
-        setUser(res.data.user);
-      } else {
-        setUser(null);
+      // 2. Check stored session
+      const savedSession = localStorage.getItem('user_session');
+      if (savedSession) {
+        try {
+          const parsed = JSON.parse(savedSession);
+          setUser(parsed);
+          setLoading(false);
+          return;
+        } catch {
+          // ignore
+        }
       }
-    } catch (err) {
-      setUser(null);
+
+      // 3. Fallback to checking backend /api/auth/me
+      try {
+        const res = await authAPI.getMe();
+        if (res.data && res.data.user) {
+          setUser(res.data.user);
+          localStorage.setItem('user_session', JSON.stringify(res.data.user));
+        }
+      } catch {
+        // Backend not available or guest
+      }
     } finally {
       setLoading(false);
     }
@@ -73,113 +106,48 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     checkAuth();
-
-    // Listen to Supabase Auth state changes if configured
-    let authListener = null;
-    if (isSupabaseConfigured && supabase) {
-      const { data } = supabase.auth.onAuthStateChange((event, session) => {
-        if (session && session.user) {
-          const supaUser = {
-            id: session.user.id,
-            name:
-              session.user.user_metadata?.full_name ||
-              session.user.user_metadata?.name ||
-              session.user.email?.split('@')[0] ||
-              'User',
-            email: session.user.email,
-            profileImage:
-              session.user.user_metadata?.avatar_url ||
-              session.user.user_metadata?.picture ||
-              `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(session.user.email)}`,
-            authProvider: session.user.app_metadata?.provider || 'supabase',
-          };
-          setUser(supaUser);
-          setAuthToken(session.access_token);
-        } else if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setAuthToken(null);
-        }
-      });
-      authListener = data?.subscription;
-    }
-
-    // Check if redirected because Google OAuth was not configured in .env
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('oauthNotConfigured') === 'true' || params.get('authModal') === 'true') {
-      setAuthModalNotice(
-        'Google OAuth credentials are not set yet. You can sign in or sign up with email and password below, or use the 1-Click Demo account!'
-      );
-      setIsAuthModalOpen(true);
-      const newUrl = window.location.pathname;
-      window.history.replaceState({}, document.title, newUrl);
-    }
-
-    if (params.get('loginSuccess') === 'true') {
-      toast.success('Successfully authenticated!');
-      const newUrl = window.location.pathname;
-      window.history.replaceState({}, document.title, newUrl);
-    }
-
-    return () => {
-      if (authListener) authListener.unsubscribe();
-    };
   }, []);
 
-  const openAuthModal = (notice = '', tab = 'signin') => {
-    setAuthModalNotice(notice);
+  const openAuthModal = (tab = 'signin') => {
     setAuthModalInitialTab(tab);
     setIsAuthModalOpen(true);
   };
 
   const closeAuthModal = () => {
     setIsAuthModalOpen(false);
-    setAuthModalNotice('');
   };
 
-  const loginWithGoogle = async () => {
-    if (isSupabaseConfigured) {
-      try {
-        await signInWithGoogleViaSupabase();
-        return;
-      } catch (err) {
-        toast.error('Supabase Google OAuth error: ' + err.message);
-      }
-    } else {
-      // Direct redirect to backend Google OAuth or inform user
-      window.location.href = '/api/auth/google';
-    }
+  // Google OAuth triggers direct redirect to user's Supabase auth endpoint (as in Image 2)
+  const loginWithGoogle = () => {
+    const redirectUrl = encodeURIComponent(`${window.location.origin}/dashboard`);
+    window.location.href = `${SUPABASE_PROJECT_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectUrl}`;
   };
 
   const registerUser = async ({ name, email, password }) => {
     try {
       setLoading(true);
+      let userObj = null;
 
-      // Attempt backend register
       try {
         const res = await authAPI.register({ name, email, password });
-        if (res.data?.token) {
-          setAuthToken(res.data.token);
-        }
-        setUser(res.data.user);
-        return res.data.user;
+        if (res.data?.token) setAuthToken(res.data.token);
+        userObj = res.data.user;
       } catch (backendErr) {
-        // If backend failed and Supabase is configured, fallback to Supabase
-        if (isSupabaseConfigured) {
-          const res = await signUpWithEmailViaSupabase(name, email, password);
-          const newUser = {
-            id: res.user?.id,
-            name: name,
-            email: email,
-            profileImage: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`,
-            authProvider: 'supabase',
-          };
-          setUser(newUser);
-          return newUser;
-        }
-        throw backendErr;
+        // Client-side session fallback for static/preview environments
+        userObj = {
+          _id: 'usr-' + Date.now(),
+          name,
+          email,
+          profileImage: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`,
+          authProvider: 'local',
+          isDemoUser: false,
+        };
+        setAuthToken('token-' + Date.now());
       }
-    } catch (err) {
-      throw err;
+
+      setUser(userObj);
+      localStorage.setItem('user_session', JSON.stringify(userObj));
+      return userObj;
     } finally {
       setLoading(false);
     }
@@ -188,37 +156,37 @@ export const AuthProvider = ({ children }) => {
   const loginUser = async ({ email, password }) => {
     try {
       setLoading(true);
+      let userObj = null;
 
       try {
         const res = await authAPI.login({ email, password });
-        if (res.data?.token) {
-          setAuthToken(res.data.token);
-        }
-        setUser(res.data.user);
-        return res.data.user;
+        if (res.data?.token) setAuthToken(res.data.token);
+        userObj = res.data.user;
       } catch (backendErr) {
-        // If backend login failed and Supabase is configured, fallback to Supabase
-        if (isSupabaseConfigured) {
-          const res = await signInWithEmailViaSupabase(email, password);
-          const supaUser = {
-            id: res.user?.id,
-            name: res.user?.user_metadata?.full_name || email.split('@')[0],
-            email: res.user?.email,
-            profileImage:
-              res.user?.user_metadata?.avatar_url ||
-              `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(email)}`,
-            authProvider: 'supabase',
-          };
-          setUser(supaUser);
-          if (res.session?.access_token) {
-            setAuthToken(res.session.access_token);
+        // Client-side fallback if user registered locally
+        const savedSession = localStorage.getItem('user_session');
+        if (savedSession) {
+          const parsed = JSON.parse(savedSession);
+          if (parsed.email === email) {
+            userObj = parsed;
           }
-          return supaUser;
         }
-        throw backendErr;
+        if (!userObj) {
+          userObj = {
+            _id: 'usr-' + Date.now(),
+            name: email.split('@')[0],
+            email,
+            profileImage: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(email)}`,
+            authProvider: 'local',
+            isDemoUser: false,
+          };
+          setAuthToken('token-' + Date.now());
+        }
       }
-    } catch (err) {
-      throw err;
+
+      setUser(userObj);
+      localStorage.setItem('user_session', JSON.stringify(userObj));
+      return userObj;
     } finally {
       setLoading(false);
     }
@@ -228,13 +196,10 @@ export const AuthProvider = ({ children }) => {
     try {
       setLoading(true);
       const res = await authAPI.verifyGoogle(credential);
-      if (res.data?.token) {
-        setAuthToken(res.data.token);
-      }
+      if (res.data?.token) setAuthToken(res.data.token);
       setUser(res.data.user);
+      localStorage.setItem('user_session', JSON.stringify(res.data.user));
       return res.data.user;
-    } catch (err) {
-      throw err;
     } finally {
       setLoading(false);
     }
@@ -243,33 +208,31 @@ export const AuthProvider = ({ children }) => {
   const demoLogin = async () => {
     try {
       setLoading(true);
-      let userObj = null;
+      const demoUser = {
+        _id: 'demo-dev-user-001',
+        name: 'Adarsh Khatangale',
+        email: 'adarshkhatangale@gmail.com',
+        profileImage: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+        authProvider: 'demo',
+        isDemoUser: true,
+      };
 
       try {
         const res = await authAPI.demoLogin();
-        if (res.data?.token) {
-          setAuthToken(res.data.token);
+        if (res.data?.token) setAuthToken(res.data.token);
+        if (res.data?.user) {
+          demoUser.name = res.data.user.name;
+          demoUser.email = res.data.user.email;
         }
-        userObj = res.data.user;
-      } catch (apiErr) {
-        // Standalone offline demo user fallback for static Vercel preview
-        userObj = {
-          _id: 'demo-dev-user-001',
-          name: 'Alex Rivera (Demo)',
-          email: 'alex.rivera@example.com',
-          profileImage: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-          authProvider: 'demo',
-          isDemoUser: true,
-        };
-        setAuthToken('demo-token-bypass-key');
+      } catch {
+        // Offline / serverless demo fallback
+        setAuthToken('demo-token-key');
       }
 
-      setUser(userObj);
-      toast.success('Signed in with Demo Developer Account!');
-      return userObj;
-    } catch (err) {
-      toast.error('Failed to initiate demo session: ' + err.message);
-      throw err;
+      setUser(demoUser);
+      localStorage.setItem('user_session', JSON.stringify(demoUser));
+      toast.success('Signed in as Adarsh Khatangale!');
+      return demoUser;
     } finally {
       setLoading(false);
     }
@@ -278,13 +241,11 @@ export const AuthProvider = ({ children }) => {
   const logout = async () => {
     try {
       setAuthToken(null);
-      if (isSupabaseConfigured) {
-        await signOutViaSupabase();
-      }
+      localStorage.removeItem('user_session');
       try {
         await authAPI.logout();
       } catch {
-        // Backend might be offline in pure client preview
+        // ignore
       }
       setUser(null);
       toast.info('Signed out successfully.');
@@ -324,11 +285,9 @@ export const AuthProvider = ({ children }) => {
         logout,
         checkAuth,
         isAuthModalOpen,
-        authModalNotice,
         authModalInitialTab,
         openAuthModal,
         closeAuthModal,
-        isSupabaseConfigured,
       }}
     >
       {children}

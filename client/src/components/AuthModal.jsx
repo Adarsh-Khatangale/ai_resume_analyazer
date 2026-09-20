@@ -15,14 +15,13 @@ import {
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 
-export default function AuthModal({ isOpen, onClose, initialNotice = '' }) {
+export default function AuthModal({ isOpen, onClose }) {
   const {
     loginUser,
     registerUser,
     demoLogin,
     loginWithGoogle,
     authModalInitialTab = 'signin',
-    isSupabaseConfigured,
   } = useAuth();
   const navigate = useNavigate();
 
@@ -33,7 +32,6 @@ export default function AuthModal({ isOpen, onClose, initialNotice = '' }) {
   const [name, setName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [notice, setNotice] = useState(initialNotice);
   const [formError, setFormError] = useState('');
 
   const modalRef = useRef(null);
@@ -41,12 +39,11 @@ export default function AuthModal({ isOpen, onClose, initialNotice = '' }) {
 
   useEffect(() => {
     setActiveTab(authModalInitialTab || 'signin');
-    setNotice(initialNotice || '');
     setFormError('');
     if (isOpen) {
       setTimeout(() => emailInputRef.current?.focus(), 80);
     }
-  }, [authModalInitialTab, initialNotice, isOpen]);
+  }, [authModalInitialTab, isOpen]);
 
   // Handle Escape key to close (Light Dismiss)
   useEffect(() => {
@@ -220,14 +217,6 @@ export default function AuthModal({ isOpen, onClose, initialNotice = '' }) {
             Sign Up
           </button>
         </div>
-
-        {/* Notice alert banner if present */}
-        {notice && (
-          <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/50 text-xs text-amber-300 flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-            <p className="leading-snug">{notice}</p>
-          </div>
-        )}
 
         {/* Form Error Banner */}
         {formError && (

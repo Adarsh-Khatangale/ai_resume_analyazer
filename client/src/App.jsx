@@ -22,7 +22,7 @@ import AuthModal from './components/AuthModal';
 
 function AppContent() {
   const { isDark } = useTheme();
-  const { isAuthModalOpen, closeAuthModal, authModalNotice } = useAuth();
+  const { isAuthModalOpen, closeAuthModal } = useAuth();
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-200">
@@ -42,7 +42,6 @@ function AppContent() {
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={closeAuthModal}
-        initialNotice={authModalNotice}
       />
       <ToastContainer
         position="bottom-right"
